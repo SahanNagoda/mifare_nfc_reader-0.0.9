@@ -409,20 +409,22 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
 
     private List<String> readNDEFMessage() throws ReaderException {
         System.out.println("ACRReader: Read NDEF Message");
-        int blockNumber = 4;
+        int blockNumber = 5;
+        final int startingBlockNo = 5;
         int ndefMessageLength = 0;
+        int paddingCount = 0;
 
         boolean loop = true;
         List<Integer> authenticatedSector = new ArrayList<>();
         List<String> ndefMessage = new ArrayList<>();
 
         while (loop) {
-            if ((blockNumber + 1) % 4 == 0) {
-                blockNumber++;
-                continue;
-            }
+            // if ((blockNumber + 1) % 4 == 0) {
+            //     blockNumber++;
+            //     continue;
+            // }
 
-            if (blockNumber > 40) {
+            if (blockNumber > 47) {
                 break;
             }
 
@@ -449,7 +451,7 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
                 List<String> message = readBlock(blockNumber);
                 // I can not found ndef message
                 if (ndefMessageLength == 0) {
-                    int paddingCount = 0;
+                    
                     int index = 0;
                     for (String hexChar : message) {
                         // read TLV message
@@ -463,6 +465,7 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
                                 index = index + 2;
                             } else {
                                 ndefMessageLength = HexUtils.toHexDecimal(message.get(index));
+                                System.out.println("ACRReader: 1: NDEF message length " + ndefMessageLength);
                             }
                             index++;
 
@@ -473,9 +476,12 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
                         index++;
                     }
 
-                    if (ndefMessageLength == 0) loop = false;
+                    if (ndefMessageLength == 0){ 
+                        System.out.println("NDEF message length is zero");
+                        loop = false;
+                    }
                     else {
-                        System.out.println("ACRReader: NDEF message length " + ndefMessageLength);
+                        System.out.println("ACRReader: 2: NDEF message length " + ndefMessageLength);
 
                         List<String> blockContent = message.subList(paddingCount, message.size());
                         if (ndefMessageLength > blockContent.size()) {
@@ -486,11 +492,14 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
                         }
                     }
                 } else {
-                    int remainNdefMessageLength = ndefMessageLength - ndefMessage.size();
+                    int remainNdefMessageLength = (((ndefMessageLength - (startingBlockNo - 1)) * 4) - ndefMessage.size()) - paddingCount;
+                    System.out.println("ACRReader: Remaining NDEF Message Length: " + remainNdefMessageLength);
                     if (remainNdefMessageLength > message.size()) {
                         ndefMessage.addAll(message);
+                        System.out.println("ACRReader: Adding All the Messages");
                     } else {
                         ndefMessage.addAll(message.subList(0, remainNdefMessageLength));
+                        System.out.println("ACRReader: Adding remainNdefMessageLength Messages");
                         loop = false;
                     }
                 }
@@ -500,9 +509,41 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
             blockNumber++;
         }
 
-        System.out.println("ACRReader: All NDEF Message " + ndefMessage.toString());
+        System.out.println("All NDEF Message " + ndefMessage.toString());
 
-        return ndefMessage;
+        List<NdefBlock> blocks = new ArrayList<>();
+        final int messageByteLength = ((ndefMessageLength - (startingBlockNo - 1)) * 4) - paddingCount;
+        for (int k = 0; k < messageByteLength; k++) {
+            // find first message
+            
+            System.out.println("ACRReader: Final NDEF message length " + messageByteLength);
+            int blockIndex = NdefBlockUtil.getBlockIndex(ndefMessage.subList(k, messageByteLength));
+            System.out.println("NILAI K " + k);
+            System.out.println("BLOCK INDEX " + blockIndex);
+            if (blockIndex < 0 ){
+                NdefBlock block = new NdefBlock(ndefMessage.subList(k, k + (blockIndex * -1)));
+                if (!block.isEmptyRecord()) {
+                    blocks.add(block);
+                }
+                break;
+            }
+            NdefBlock block = new NdefBlock(ndefMessage.subList(k, k + blockIndex));
+            if (!block.isEmptyRecord()) {
+                blocks.add(block);
+            }
+            k = k + blockIndex - 1;
+        }
+
+        List<String> messages = new ArrayList<>();
+        for (NdefBlock block : blocks) {
+            System.out.println("BEGIN : " + block.isMessageBegin());
+            System.out.println("END : " + block.isMessageEnd());
+            System.out.println("PAYLOAD : " + block.getPayload());
+
+            messages.add(block.getPayload());
+        }
+
+        return messages;
     }
 
     private boolean authenticationWithKey(String aKeyCommand) throws ReaderException {

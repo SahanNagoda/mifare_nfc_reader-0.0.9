@@ -19,7 +19,7 @@ public class MifareCommand {
     public static String readDataBlockCommand(int blockNumber) {
         String hexBlockNumber = HexUtils.toHexString(blockNumber);
 
-        return "FFB000" + hexBlockNumber + "10";
+        return "FFB000" + hexBlockNumber + "04";
     }
 
     public static String updateBlockCommand(int blockNumber, String data) {

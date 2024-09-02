@@ -22,6 +22,18 @@ public class NdefBlockUtil {
 
         int payloadLength = 0;
         int firstIndex = 3;
+        //Print all the variables
+        System.out.println("Record Header: " + recordHeaderInt);
+        System.out.println("Binary: " + bin);
+        System.out.println("Message Begin: " + messageBegin);
+        System.out.println("Message End: " + messageEnd);
+        System.out.println("Chunk Flag: " + chunkFlag);
+        System.out.println("Short Record: " + shortRecord);
+        System.out.println("ID Length: " + idLength);
+        System.out.println("Type Name Format: " + typeNameFormat);
+        System.out.println("Type Length: " + typeLength);
+        System.out.println("Payload Length: " + payloadLength);
+        // System.out.println("Payload ID Length: " + payloadIdLength);
         if (shortRecord) {
             payloadLength = Integer.parseInt(block.get(2), 16);
         } else {
@@ -32,6 +44,10 @@ public class NdefBlockUtil {
         int payloadIdLength = 0;
         if (idLength) {
             payloadIdLength = 1;
+        }
+
+        if (messageEnd) {
+            return (firstIndex + typeLength + payloadLength + payloadIdLength) * -1;
         }
 
         return firstIndex + typeLength + payloadLength + payloadIdLength;
