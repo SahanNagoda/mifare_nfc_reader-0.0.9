@@ -230,56 +230,25 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
         System.out.println("Input text: " + text);
         System.out.println("Text length: " + text.length());
         System.out.println("Timestamp: " + System.currentTimeMillis());
-        
-        // Clear the card first to ensure clean writing
-        System.out.println("=== Clearing card before writing ===");
-        boolean clearSuccess = writeEmpty();
-        if (!clearSuccess) {
-            System.out.println("⚠️ Warning: Failed to clear card, but continuing with write...");
-        } else {
-            System.out.println("✓ Card cleared successfully");
-        }
-        
+
+        // Build NDEF Text Record (as before)
         String prefixHex = "02656E"; // 2en
         String textHex = HexUtils.asciiToHex(text);
         int payloadLength = text.length() + 3;
         String payloadLengthHex = HexUtils.toHexString(payloadLength);
-        
-        System.out.println("Language prefix (hex): " + prefixHex);
-        System.out.println("Text hex: " + textHex);
-        System.out.println("Payload length: " + payloadLength);
-        System.out.println("Payload length hex: " + payloadLengthHex);
-        
         if (payloadLength > 255) {
             payloadLengthHex = HexUtils.decimalToFourBytesHex(payloadLength);
-            System.out.println("Using 4-byte length format: " + payloadLengthHex);
         }
-
-        // build record header
         String messageBegin = "1";
         String messageEnd = "1";
         String chunkFlag = "0";
         String shortRecord = payloadLength > 255 ? "0" : "1";
         String idLength = "0";
         String typeNameFormat = "001";
-
         String recordHeaderBin = messageBegin + messageEnd + chunkFlag + shortRecord + idLength + typeNameFormat;
         String recordHeader = HexUtils.binaryStrToHex(recordHeaderBin);
         String typeLength = "01";
         String typeField = "54"; // T
-
-        System.out.println("=== NDEF Record Header ===");
-        System.out.println("Message Begin: " + messageBegin);
-        System.out.println("Message End: " + messageEnd);
-        System.out.println("Chunk Flag: " + chunkFlag);
-        System.out.println("Short Record: " + shortRecord);
-        System.out.println("ID Length: " + idLength);
-        System.out.println("Type Name Format: " + typeNameFormat);
-        System.out.println("Record Header Binary: " + recordHeaderBin);
-        System.out.println("Record Header Hex: " + recordHeader);
-        System.out.println("Type Length: " + typeLength);
-        System.out.println("Type Field: " + typeField + " (T for Text)");
-
         StringBuilder blockDataBuilder = new StringBuilder();
         blockDataBuilder.append(recordHeader);
         blockDataBuilder.append(typeLength);
@@ -287,23 +256,26 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
         blockDataBuilder.append(typeField);
         blockDataBuilder.append(prefixHex);
         blockDataBuilder.append(textHex);
-
-        System.out.println("=== Final NDEF Block Data ===");
-        System.out.println("Record Header: " + recordHeader);
-        System.out.println("Type Length: " + typeLength);
-        System.out.println("Payload Length: " + payloadLengthHex);
-        System.out.println("Type Field: " + typeField);
-        System.out.println("Language Prefix: " + prefixHex);
-        System.out.println("Text Content: " + textHex);
-        System.out.println("Complete Block Data: " + blockDataBuilder.toString());
-        System.out.println("Block Data Length (bytes): " + (blockDataBuilder.length() / 2));
-
-        System.out.println("=== Calling write() method ===");
-        boolean result = write(blockDataBuilder);
-        System.out.println("=== writeTextToCard completed ===");
-        System.out.println("Result: " + (result ? "SUCCESS" : "FAILED"));
-        
-        return result;
+        // Build TLV
+        String tlvPadding = "0000";
+        String tlvNdefMessage = "03";
+        int lengthBlockData = blockDataBuilder.length() / 2;
+        String ndefMessageLength = lengthBlockData > 255 ? "FF" + HexUtils.decimalToTwoBytesHex(lengthBlockData) : HexUtils.toHexString(lengthBlockData);
+        StringBuilder ndefBuilder = new StringBuilder();
+        ndefBuilder.append(tlvPadding);
+        ndefBuilder.append(tlvNdefMessage);
+        ndefBuilder.append(ndefMessageLength);
+        ndefBuilder.append(blockDataBuilder.toString());
+        ndefBuilder.append("FE");
+        // Convert to byte array
+        String ndefHex = ndefBuilder.toString();
+        int ndefLen = ndefHex.length();
+        byte[] ndefBytes = new byte[(ndefLen + 1) / 2];
+        for (int i = 0; i < ndefLen; i += 2) {
+            ndefBytes[i / 2] = (byte) Integer.parseInt(ndefHex.substring(i, Math.min(i + 2, ndefLen)), 16);
+        }
+        // Write to NTAG21x
+        return writeNdefToNtag21x(ndefBytes);
     }
 
     private boolean writeEmpty() throws ReaderException {
@@ -938,6 +910,54 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
 
     void onReadUID(String uid) {
         handler.post(() -> channel.invokeMethod("onReadUID", uid));
+    }
+
+    /**
+     * Write 4 bytes to a specific page of NTAG21x using ACS Direct Transmit.
+     * @param page The page number (e.g., 4 for first user page)
+     * @param data 4 bytes to write (must be length 4)
+     * @return true if write was successful, false otherwise
+     */
+    private boolean writeNtag21xPage(int page, byte[] data) throws ReaderException {
+        if (data.length != 4) throw new IllegalArgumentException("Data must be 4 bytes");
+        int slotNum = 0;
+        byte[] command = new byte[] {
+            (byte)0xFF, (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x05,
+            (byte)0xD4, (byte)0x40, (byte)0x01, // InDataExchange, Card number
+            (byte)0xA2, // NTAG21x WRITE command
+            (byte)page, // Page number
+            data[0], data[1], data[2], data[3]
+        };
+        byte[] response = new byte[256];
+        int responseLength = getReader().transmit(slotNum, command, command.length, response, response.length);
+        if (responseLength >= 2 && response[responseLength-2] == (byte)0x90 && response[responseLength-1] == (byte)0x00) {
+            System.out.println("Write to page " + page + " successful");
+            return true;
+        } else {
+            System.out.println("Write to page " + page + " failed, response: " + HexUtils.toHexString(response));
+            return false;
+        }
+    }
+
+    /**
+     * Write a full NDEF TLV byte array to NTAG21x user memory (starting at page 4).
+     */
+    private boolean writeNdefToNtag21x(byte[] ndefTlv) throws ReaderException {
+        int page = 4; // NTAG21x user memory starts at page 4
+        for (int i = 0; i < ndefTlv.length; i += 4) {
+            byte[] chunk = new byte[4];
+            for (int j = 0; j < 4; j++) {
+                if (i + j < ndefTlv.length) {
+                    chunk[j] = ndefTlv[i + j];
+                } else {
+                    chunk[j] = 0x00; // pad with zeros
+                }
+            }
+            boolean ok = writeNtag21xPage(page, chunk);
+            if (!ok) return false;
+            page++;
+        }
+        return true;
     }
 }
 
