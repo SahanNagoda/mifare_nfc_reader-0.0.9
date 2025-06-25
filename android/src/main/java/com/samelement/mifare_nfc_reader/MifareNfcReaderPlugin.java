@@ -226,11 +226,6 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
     }
 
     private boolean writeTextToCard(String text) throws ReaderException {
-        System.out.println("=== Starting writeTextToCard ===");
-        System.out.println("Input text: " + text);
-        System.out.println("Text length: " + text.length());
-        System.out.println("Timestamp: " + System.currentTimeMillis());
-
         // Build NDEF Text Record (as before)
         String prefixHex = "02656E"; // 2en
         String textHex = HexUtils.asciiToHex(text);
@@ -930,8 +925,8 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
         };
         byte[] response = new byte[256];
         int responseLength = getReader().transmit(slotNum, command, command.length, response, response.length);
+        // Only log on error
         if (responseLength >= 2 && response[responseLength-2] == (byte)0x90 && response[responseLength-1] == (byte)0x00) {
-            System.out.println("Write to page " + page + " successful");
             return true;
         } else {
             System.out.println("Write to page " + page + " failed, response: " + HexUtils.toHexString(response));
