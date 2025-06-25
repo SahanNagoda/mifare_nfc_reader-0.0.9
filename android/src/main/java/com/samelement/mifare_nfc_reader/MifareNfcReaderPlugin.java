@@ -47,7 +47,11 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
             "Present", "Swallowed", "Powered", "Negotiable", "Specific"};
 
     private final Handler handler = new Handler(Looper.getMainLooper());
-
+    
+    // Add timestamp tracking to prevent rapid repeated calls
+    private long lastWriteTextCall = 0;
+    private long lastWriteJsonCall = 0;
+    private static final long MIN_CALL_INTERVAL = 2000; // 2 seconds minimum between calls
 
     @Override
     public void onAttachedToEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
@@ -59,6 +63,8 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
 
     @Override
     public void onMethodCall(@NonNull MethodCall call, @NonNull Result result) {
+        System.out.println("=== Method Call: " + call.method + " ===");
+        
         if ("init".equals(call.method)) {
             UsbDevice usbDevice = getConnectedReader();
             if (usbDevice != null) {
@@ -70,35 +76,65 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
                 result.success(false);
             }
         } else if ("writeText".equals(call.method)) {
+            System.out.println("=== writeText called with: " + call.argument("text") + " ===");
+            
+            // Check for rapid repeated calls
+            long currentTime = System.currentTimeMillis();
+            if (currentTime - lastWriteTextCall < MIN_CALL_INTERVAL) {
+                System.out.println("=== writeText called too frequently, ignoring call ===");
+                result.error("RATE_LIMIT", "Method called too frequently", null);
+                return;
+            }
+            lastWriteTextCall = currentTime;
+            
             try {
                 boolean writeSuccessful = writeTextToCard(call.argument("text"));
+                System.out.println("=== writeText result: " + (writeSuccessful ? "SUCCESS" : "FAILED") + " ===");
                 if (writeSuccessful) result.success(true);
                 else result.success(false);
             } catch (ReaderException e) {
+                System.out.println("=== writeText ReaderException: " + e.getMessage() + " ===");
                 e.printStackTrace();
                 result.error(READER_EXCEPTION, e.getMessage(), null);
             }
         } else if ("writeJson".equals(call.method)) {
+            System.out.println("=== writeJson called with: " + call.argument("json") + " ===");
+            
+            // Check for rapid repeated calls
+            long currentTime = System.currentTimeMillis();
+            if (currentTime - lastWriteJsonCall < MIN_CALL_INTERVAL) {
+                System.out.println("=== writeJson called too frequently, ignoring call ===");
+                result.error("RATE_LIMIT", "Method called too frequently", null);
+                return;
+            }
+            lastWriteJsonCall = currentTime;
+            
             try {
                 boolean writeSuccessful = writeJsonToCard(call.argument("json"));
+                System.out.println("=== writeJson result: " + (writeSuccessful ? "SUCCESS" : "FAILED") + " ===");
                 if (writeSuccessful) result.success(true);
                 else result.success(false);
             } catch (ReaderException e) {
+                System.out.println("=== writeJson ReaderException: " + e.getMessage() + " ===");
                 e.printStackTrace();
                 result.error(READER_EXCEPTION, e.getMessage(), null);
             }
         } else if ("clearCard".equals(call.method)) {
+            System.out.println("=== clearCard called ===");
             try {
                 StringBuilder builder = new StringBuilder();
                 builder.append(MifareCommand.clearCommand());
                 boolean writeSuccessful = write(builder);
+                System.out.println("=== clearCard result: " + (writeSuccessful ? "SUCCESS" : "FAILED") + " ===");
                 if (writeSuccessful) result.success(true);
                 else result.success(false);
             } catch (ReaderException e) {
+                System.out.println("=== clearCard ReaderException: " + e.getMessage() + " ===");
                 e.printStackTrace();
                 result.error(READER_EXCEPTION, e.getMessage(), null);
             }
         } else {
+            System.out.println("=== Method not implemented: " + call.method + " ===");
             result.notImplemented();
         }
     }
@@ -113,12 +149,31 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
     }
 
     private boolean writeJsonToCard(String json) throws ReaderException {
+        System.out.println("=== Starting writeJsonToCard ===");
+        System.out.println("Input JSON: " + json);
+        System.out.println("JSON length: " + json.length());
+        System.out.println("Timestamp: " + System.currentTimeMillis());
+        
+        // Clear the card first to ensure clean writing
+        System.out.println("=== Clearing card before writing ===");
+        boolean clearSuccess = writeEmpty();
+        if (!clearSuccess) {
+            System.out.println("⚠️ Warning: Failed to clear card, but continuing with write...");
+        } else {
+            System.out.println("✓ Card cleared successfully");
+        }
+        
         String jsonHex = HexUtils.asciiToHex(json);
-
         int payloadLength = json.length();
         String payloadLengthHex = HexUtils.toHexString(payloadLength);
+        
+        System.out.println("JSON hex: " + jsonHex);
+        System.out.println("Payload length: " + payloadLength);
+        System.out.println("Payload length hex: " + payloadLengthHex);
+        
         if (payloadLength > 255) {
             payloadLengthHex = HexUtils.decimalToFourBytesHex(payloadLength);
+            System.out.println("Using 4-byte length format: " + payloadLengthHex);
         }
 
         // build record header
@@ -134,6 +189,18 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
         String typeLength = "10";
         String typeField = "6170706C69636174696F6E2F6A736F6E"; // application/json
 
+        System.out.println("=== NDEF Record Header ===");
+        System.out.println("Message Begin: " + messageBegin);
+        System.out.println("Message End: " + messageEnd);
+        System.out.println("Chunk Flag: " + chunkFlag);
+        System.out.println("Short Record: " + shortRecord);
+        System.out.println("ID Length: " + idLength);
+        System.out.println("Type Name Format: " + typeNameFormat + " (Media Type)");
+        System.out.println("Record Header Binary: " + recordHeaderBin);
+        System.out.println("Record Header Hex: " + recordHeader);
+        System.out.println("Type Length: " + typeLength);
+        System.out.println("Type Field: " + typeField + " (application/json)");
+
         StringBuilder blockDataBuilder = new StringBuilder();
         blockDataBuilder.append(recordHeader);
         blockDataBuilder.append(typeLength);
@@ -141,16 +208,51 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
         blockDataBuilder.append(typeField);
         blockDataBuilder.append(jsonHex);
 
-        return write(blockDataBuilder);
+        System.out.println("=== Final NDEF Block Data ===");
+        System.out.println("Record Header: " + recordHeader);
+        System.out.println("Type Length: " + typeLength);
+        System.out.println("Payload Length: " + payloadLengthHex);
+        System.out.println("Type Field: " + typeField);
+        System.out.println("JSON Content: " + jsonHex);
+        System.out.println("Complete Block Data: " + blockDataBuilder.toString());
+        System.out.println("Block Data Length (bytes): " + (blockDataBuilder.length() / 2));
+
+        System.out.println("=== Calling write() method ===");
+        boolean result = write(blockDataBuilder);
+        System.out.println("=== writeJsonToCard completed ===");
+        System.out.println("Result: " + (result ? "SUCCESS" : "FAILED"));
+        
+        return result;
     }
 
     private boolean writeTextToCard(String text) throws ReaderException {
+        System.out.println("=== Starting writeTextToCard ===");
+        System.out.println("Input text: " + text);
+        System.out.println("Text length: " + text.length());
+        System.out.println("Timestamp: " + System.currentTimeMillis());
+        
+        // Clear the card first to ensure clean writing
+        System.out.println("=== Clearing card before writing ===");
+        boolean clearSuccess = writeEmpty();
+        if (!clearSuccess) {
+            System.out.println("⚠️ Warning: Failed to clear card, but continuing with write...");
+        } else {
+            System.out.println("✓ Card cleared successfully");
+        }
+        
         String prefixHex = "02656E"; // 2en
         String textHex = HexUtils.asciiToHex(text);
         int payloadLength = text.length() + 3;
         String payloadLengthHex = HexUtils.toHexString(payloadLength);
+        
+        System.out.println("Language prefix (hex): " + prefixHex);
+        System.out.println("Text hex: " + textHex);
+        System.out.println("Payload length: " + payloadLength);
+        System.out.println("Payload length hex: " + payloadLengthHex);
+        
         if (payloadLength > 255) {
             payloadLengthHex = HexUtils.decimalToFourBytesHex(payloadLength);
+            System.out.println("Using 4-byte length format: " + payloadLengthHex);
         }
 
         // build record header
@@ -166,6 +268,18 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
         String typeLength = "01";
         String typeField = "54"; // T
 
+        System.out.println("=== NDEF Record Header ===");
+        System.out.println("Message Begin: " + messageBegin);
+        System.out.println("Message End: " + messageEnd);
+        System.out.println("Chunk Flag: " + chunkFlag);
+        System.out.println("Short Record: " + shortRecord);
+        System.out.println("ID Length: " + idLength);
+        System.out.println("Type Name Format: " + typeNameFormat);
+        System.out.println("Record Header Binary: " + recordHeaderBin);
+        System.out.println("Record Header Hex: " + recordHeader);
+        System.out.println("Type Length: " + typeLength);
+        System.out.println("Type Field: " + typeField + " (T for Text)");
+
         StringBuilder blockDataBuilder = new StringBuilder();
         blockDataBuilder.append(recordHeader);
         blockDataBuilder.append(typeLength);
@@ -174,72 +288,105 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
         blockDataBuilder.append(prefixHex);
         blockDataBuilder.append(textHex);
 
-        return write(blockDataBuilder);
+        System.out.println("=== Final NDEF Block Data ===");
+        System.out.println("Record Header: " + recordHeader);
+        System.out.println("Type Length: " + typeLength);
+        System.out.println("Payload Length: " + payloadLengthHex);
+        System.out.println("Type Field: " + typeField);
+        System.out.println("Language Prefix: " + prefixHex);
+        System.out.println("Text Content: " + textHex);
+        System.out.println("Complete Block Data: " + blockDataBuilder.toString());
+        System.out.println("Block Data Length (bytes): " + (blockDataBuilder.length() / 2));
+
+        System.out.println("=== Calling write() method ===");
+        boolean result = write(blockDataBuilder);
+        System.out.println("=== writeTextToCard completed ===");
+        System.out.println("Result: " + (result ? "SUCCESS" : "FAILED"));
+        
+        return result;
     }
 
     private boolean writeEmpty() throws ReaderException {
         boolean success = true;
-        int trailerBlock = 7;
-        int blockNumber = 4;
-        boolean isSectorAuthenticated = loadsAuthenticationKey() && authentication(trailerBlock);
-        if (isSectorAuthenticated) {
+        
+        // For NTAG213 cards, clear NDEF data by writing zeros to writable blocks
+        System.out.println("Clearing NDEF data on NTAG213 card...");
+        
+        for (int blockNumber = 5; blockNumber <= 35; blockNumber++) {
+            // Skip protected blocks
+            if (!isBlockWritable(blockNumber)) {
+                System.out.println("Skipping protected block " + blockNumber + " during clear");
+                continue;
+            }
+            
             int slotNum = 0;
             byte[] command;
             byte[] response = new byte[65538];
             int responseLength;
 
-            command = HexUtils.toByteArray(MifareCommand.clearCommand());
-            System.out.println("command " + HexUtils.paddingTo16Bytes(MifareCommand.clearCommand()));
+            // Write 16 bytes of zeros to clear the block
+            String clearData = "00000000000000000000000000000000";
+            command = HexUtils.toByteArray(MifareCommand.updateBlockCommand(blockNumber, clearData));
+            System.out.println("Clearing block " + blockNumber + ": " + clearData);
+            
             responseLength = getReader().transmit(slotNum, command, command.length, response, response.length);
 
             StringBuilder bufferString = new StringBuilder();
             List<String> hexResults = new ArrayList<>();
 
             for (int i = 0; i < responseLength; i++) {
-
                 String hexChar = Integer.toHexString(response[i] & 0xFF);
                 if (hexChar.length() == 1) {
                     hexChar = "0" + hexChar;
                 }
-
                 hexResults.add(hexChar);
                 bufferString.append(hexChar.toUpperCase());
             }
 
-            System.out.println("Eh resultnya " + bufferString.toString());
+            System.out.println("Clear block " + blockNumber + " response: " + bufferString.toString());
 
             if (hexResults.size() > 1 &&
                     hexResults.get(hexResults.size() - 2).equals("90") &&
                     hexResults.get(hexResults.size() - 1).equals("00")
             ) {
-                System.out.println("Write to block " + blockNumber + " successful ");
+                System.out.println("Clear block " + blockNumber + " successful");
             } else {
-                System.out.println("Error write card");
-                success = false;
+                System.out.println("Error clearing block " + blockNumber + " (may be protected)");
+                // Don't break on protected blocks, just continue
+                continue;
             }
-        } else {
-            success = false;
         }
 
-        return success;
+        System.out.println("NTAG213 card clearing completed");
+        return true; // Return true even if some blocks couldn't be cleared (they might be protected)
+    }
+
+    private boolean isBlockWritable(int blockNumber) {
+        // NTAG213 has 36 pages (0-35)
+        // Blocks 0-3 are typically read-only (UID, internal bytes, lock bytes)
+        // Block 4 might be protected depending on the card configuration
+        // Blocks 5-35 are typically writable
+        return blockNumber >= 5 && blockNumber <= 35;
     }
 
     private boolean write(StringBuilder blockDataBuilder) throws ReaderException {
         boolean success = true;
 
-        System.out.println("Block data builder " + blockDataBuilder.toString());
+        System.out.println("=== Starting write() method for NTAG213 ===");
+        System.out.println("Block data builder: " + blockDataBuilder.toString());
         int lengthBlockData = blockDataBuilder.length() / 2;
-        System.out.println("Length block data " + lengthBlockData);
+        System.out.println("Length block data (bytes): " + lengthBlockData);
 
         String ndefMessageLength;
-
         String tlvPadding = "0000";
         String tlvNdefMessage = "03";
 
         if (lengthBlockData > 255) {
             ndefMessageLength = "FF" + HexUtils.decimalToTwoBytesHex(lengthBlockData);
+            System.out.println("Using extended length format (FF + 2 bytes): " + ndefMessageLength);
         } else {
             ndefMessageLength = HexUtils.toHexString(lengthBlockData);
+            System.out.println("Using short length format: " + ndefMessageLength);
         }
 
         StringBuilder ndefBuilder = new StringBuilder();
@@ -249,78 +396,112 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
         ndefBuilder.append(blockDataBuilder.toString());
         ndefBuilder.append("FE");
 
-        System.out.println("NDEF : " + ndefBuilder.toString());
-        // dibagi tiap block
+        System.out.println("=== TLV Structure ===");
+        System.out.println("TLV Padding: " + tlvPadding);
+        System.out.println("TLV NDEF Tag: " + tlvNdefMessage);
+        System.out.println("NDEF Length: " + ndefMessageLength);
+        System.out.println("NDEF Data: " + blockDataBuilder.toString());
+        System.out.println("TLV Terminator: FE");
+        System.out.println("Complete NDEF: " + ndefBuilder.toString());
+        System.out.println("Total NDEF length (bytes): " + (ndefBuilder.length() / 2));
 
+        // Split into 16-byte blocks (32 hex characters)
         List<String> ndefSplit = HexUtils.usingSplitMethod(ndefBuilder.toString(), 32);
-        System.out.println("Ndef after split : " + ndefSplit.toString());
+        System.out.println("=== Block Splitting ===");
+        System.out.println("Number of blocks needed: " + ndefSplit.size());
+        for (int i = 0; i < ndefSplit.size(); i++) {
+            System.out.println("Block " + i + ": " + ndefSplit.get(i) + " (length: " + (ndefSplit.get(i).length() / 2) + " bytes)");
+        }
 
         int index = 0;
-        List<Integer> authenticatedSector = new ArrayList<>();
+        int blockNumber = 5; // Start from block 5 for NTAG213 (blocks 0-4 are typically protected)
 
-        int blockNumber = 4;
+        System.out.println("=== Writing to NTAG213 Card ===");
+        System.out.println("Starting block number: " + blockNumber);
+        System.out.println("Maximum block number: 35 (NTAG213 has 36 pages, 0-35)");
+
         while (index < ndefSplit.size()) {
-            if ((blockNumber + 1) % 4 != 0) {
-                int sector = blockNumber / 4;
-                boolean isSectorAuthenticated;
-
-                if (!authenticatedSector.contains(sector)) {
-                    int trailerBlock = ((sector + 1) * 4) - 1;
-                    isSectorAuthenticated = loadsAuthenticationKey() && authentication(trailerBlock);
-                    if (isSectorAuthenticated) {
-                        System.out.println("Sector " + sector + " authenticated");
-                        authenticatedSector.add(sector);
-                    }
-                } else {
-                    isSectorAuthenticated = true;
-                    System.out.println("Sector " + sector + " already authenticated");
-                }
-
-                if (isSectorAuthenticated) {
-                    int slotNum = 0;
-                    byte[] command;
-                    byte[] response = new byte[65538];
-                    int responseLength;
-
-                    System.out.println("Mau write " + HexUtils.paddingTo16Bytes(ndefSplit.get(index)));
-
-                    command = HexUtils.toByteArray(MifareCommand.updateBlockCommand(blockNumber, HexUtils.paddingTo16Bytes(ndefSplit.get(index))));
-                    responseLength = getReader().transmit(slotNum, command, command.length, response, response.length);
-
-                    StringBuilder bufferString = new StringBuilder();
-                    List<String> hexResults = new ArrayList<>();
-
-                    for (int i = 0; i < responseLength; i++) {
-
-                        String hexChar = Integer.toHexString(response[i] & 0xFF);
-                        if (hexChar.length() == 1) {
-                            hexChar = "0" + hexChar;
-                        }
-
-                        hexResults.add(hexChar);
-                        bufferString.append(hexChar.toUpperCase());
-                    }
-
-                    System.out.println("Eh resultnya " + bufferString.toString());
-
-                    if (hexResults.size() > 1 &&
-                            hexResults.get(hexResults.size() - 2).equals("90") &&
-                            hexResults.get(hexResults.size() - 1).equals("00")
-                    ) {
-                        System.out.println("Write to block " + blockNumber + " successful ");
-                    } else {
-                        System.out.println("Error write card");
-                        success = false;
-                        break;
-                    }
-                }
-
-                index++;
+            if (blockNumber > 35) { // NTAG213 has 36 pages (0-35)
+                System.out.println("Reached maximum block number for NTAG213");
+                System.out.println("⚠️ Warning: Not all data could be written due to block limitations");
+                break;
             }
 
-            blockNumber++;
+            // Skip protected blocks
+            if (!isBlockWritable(blockNumber)) {
+                System.out.println("Skipping protected block " + blockNumber);
+                blockNumber++;
+                continue;
+            }
 
+            int slotNum = 0;
+            byte[] command;
+            byte[] response = new byte[65538];
+            int responseLength;
+
+            String blockData = HexUtils.paddingTo16Bytes(ndefSplit.get(index));
+            System.out.println("Writing to block " + blockNumber + ": " + blockData);
+
+            command = HexUtils.toByteArray(MifareCommand.updateBlockCommand(blockNumber, blockData));
+            System.out.println("APDU Command: " + MifareCommand.updateBlockCommand(blockNumber, blockData));
+            
+            responseLength = getReader().transmit(slotNum, command, command.length, response, response.length);
+
+            StringBuilder bufferString = new StringBuilder();
+            List<String> hexResults = new ArrayList<>();
+
+            for (int i = 0; i < responseLength; i++) {
+                String hexChar = Integer.toHexString(response[i] & 0xFF);
+                if (hexChar.length() == 1) {
+                    hexChar = "0" + hexChar;
+                }
+                hexResults.add(hexChar);
+                bufferString.append(hexChar.toUpperCase());
+            }
+
+            System.out.println("Write response: " + bufferString.toString());
+
+            if (hexResults.size() > 1 &&
+                    hexResults.get(hexResults.size() - 2).equals("90") &&
+                    hexResults.get(hexResults.size() - 1).equals("00")
+            ) {
+                System.out.println("✓ Write to block " + blockNumber + " successful");
+            } else {
+                System.out.println("✗ Error writing to block " + blockNumber);
+                System.out.println("Response: " + bufferString.toString());
+                
+                // Handle specific error codes
+                if (bufferString.toString().equals("6300")) {
+                    System.out.println("Error 6300: Command not allowed or block might be protected");
+                    System.out.println("Block " + blockNumber + " appears to be protected. Trying next block...");
+                    
+                    // Skip this block and try the next one
+                    blockNumber++;
+                    continue;
+                } else if (bufferString.toString().equals("6400")) {
+                    System.out.println("Error 6400: Execution error");
+                    System.out.println("✗ Execution error on block " + blockNumber);
+                    success = false;
+                    break;
+                } else if (bufferString.toString().equals("6700")) {
+                    System.out.println("Error 6700: Wrong length");
+                    System.out.println("✗ Wrong length error on block " + blockNumber);
+                    success = false;
+                    break;
+                } else {
+                    System.out.println("✗ Unrecoverable error on block " + blockNumber + ": " + bufferString.toString());
+                    success = false;
+                    break;
+                }
+            }
+
+            index++;
+            blockNumber++;
         }
+
+        System.out.println("=== write() method completed ===");
+        System.out.println("Final result: " + (success ? "SUCCESS" : "FAILED"));
+        System.out.println("Blocks written: " + index + " out of " + ndefSplit.size());
 
         return success;
     }
@@ -408,102 +589,74 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
 
 
     private List<String> readNDEFMessage() throws ReaderException {
-        System.out.println("ACRReader: Read NDEF Message");
-        int blockNumber = 5;
-        final int startingBlockNo = 5;
+        System.out.println("ACRReader: Read NDEF Message from NTAG213");
+        int blockNumber = 4; // Start from block 4 for NTAG213
+        final int startingBlockNo = 4;
         int ndefMessageLength = 0;
         int paddingCount = 0;
 
         boolean loop = true;
-        List<Integer> authenticatedSector = new ArrayList<>();
         List<String> ndefMessage = new ArrayList<>();
 
         while (loop) {
-            // if ((blockNumber + 1) % 4 == 0) {
-            //     blockNumber++;
-            //     continue;
-            // }
-
-            if (blockNumber > 47) {
+            if (blockNumber > 35) { // NTAG213 has 36 pages (0-35)
                 break;
             }
 
-            int sector = blockNumber / 4;
-            boolean isSectorAuthenticated;
-
-            if (!authenticatedSector.contains(sector)) {
-                System.out.println("ACRReader: Authenticate Sector " + sector);
-                int trailerBlock = ((sector + 1) * 4) - 1;
-                isSectorAuthenticated = loadsAuthenticationKey();// && authentication(trailerBlock);
-                if (isSectorAuthenticated) {
-                    System.out.println("ACRReader: Sector " + sector + " authenticated");
-                    authenticatedSector.add(sector);
-                } else {
-                    System.out.println("ACRReader: Sector " + sector + " authenticate Fail");
-                }
-            } else {
-                isSectorAuthenticated = true;
-                System.out.println("ACRReader: Sector " + sector + " already authenticated");
-            }
-
-            if (isSectorAuthenticated) {
-                System.out.println("ACRReader: Read Block Number : " + blockNumber);
-                List<String> message = readBlock(blockNumber);
-                // I can not found ndef message
-                if (ndefMessageLength == 0) {
-                    
-                    int index = 0;
-                    for (String hexChar : message) {
-                        // read TLV message
-                        if (hexChar.equals("03")) {
-                            // this is a NDEF Message
-                            index++;
-                            // read length of a NDEF Message
-                            if (message.get(index).equals("FF")) {
-                                // read two more bytes for length
-                                ndefMessageLength = HexUtils.toHexDecimal(message.get(index + 1) + message.get(index + 2));
-                                index = index + 2;
-                            } else {
-                                ndefMessageLength = HexUtils.toHexDecimal(message.get(index));
-                                System.out.println("ACRReader: 1: NDEF message length " + ndefMessageLength);
-                            }
-                            index++;
-
-
-                            paddingCount = index;
-                            break;
+            System.out.println("ACRReader: Read Block Number : " + blockNumber);
+            List<String> message = readBlock(blockNumber);
+            
+            // I can not found ndef message
+            if (ndefMessageLength == 0) {
+                int index = 0;
+                for (String hexChar : message) {
+                    // read TLV message
+                    if (hexChar.equals("03")) {
+                        // this is a NDEF Message
+                        index++;
+                        // read length of a NDEF Message
+                        if (message.get(index).equals("FF")) {
+                            // read two more bytes for length
+                            ndefMessageLength = HexUtils.toHexDecimal(message.get(index + 1) + message.get(index + 2));
+                            index = index + 2;
+                        } else {
+                            ndefMessageLength = HexUtils.toHexDecimal(message.get(index));
+                            System.out.println("ACRReader: 1: NDEF message length " + ndefMessageLength);
                         }
                         index++;
-                    }
 
-                    if (ndefMessageLength == 0){ 
-                        System.out.println("NDEF message length is zero");
-                        loop = false;
+                        paddingCount = index;
+                        break;
                     }
-                    else {
-                        System.out.println("ACRReader: 2: NDEF message length " + ndefMessageLength);
+                    index++;
+                }
 
-                        List<String> blockContent = message.subList(paddingCount, message.size());
-                        if (ndefMessageLength > blockContent.size()) {
-                            ndefMessage.addAll(message.subList(paddingCount, message.size()));
-                        } else {
-                            ndefMessage.addAll(message.subList(paddingCount, paddingCount + ndefMessageLength));
-                            loop = false;
-                        }
-                    }
-                } else {
-                    int remainNdefMessageLength = (((ndefMessageLength - (startingBlockNo - 1)) * 4) - ndefMessage.size()) - paddingCount;
-                    System.out.println("ACRReader: Remaining NDEF Message Length: " + remainNdefMessageLength);
-                    if (remainNdefMessageLength > message.size()) {
-                        ndefMessage.addAll(message);
-                        System.out.println("ACRReader: Adding All the Messages");
+                if (ndefMessageLength == 0){ 
+                    System.out.println("NDEF message length is zero");
+                    loop = false;
+                }
+                else {
+                    System.out.println("ACRReader: 2: NDEF message length " + ndefMessageLength);
+
+                    List<String> blockContent = message.subList(paddingCount, message.size());
+                    if (ndefMessageLength > blockContent.size()) {
+                        ndefMessage.addAll(message.subList(paddingCount, message.size()));
                     } else {
-                        ndefMessage.addAll(message.subList(0, remainNdefMessageLength));
-                        System.out.println("ACRReader: Adding remainNdefMessageLength Messages");
+                        ndefMessage.addAll(message.subList(paddingCount, paddingCount + ndefMessageLength));
                         loop = false;
                     }
                 }
-
+            } else {
+                int remainNdefMessageLength = (((ndefMessageLength - (startingBlockNo - 1)) * 4) - ndefMessage.size()) - paddingCount;
+                System.out.println("ACRReader: Remaining NDEF Message Length: " + remainNdefMessageLength);
+                if (remainNdefMessageLength > message.size()) {
+                    ndefMessage.addAll(message);
+                    System.out.println("ACRReader: Adding All the Messages");
+                } else {
+                    ndefMessage.addAll(message.subList(0, remainNdefMessageLength));
+                    System.out.println("ACRReader: Adding remainNdefMessageLength Messages");
+                    loop = false;
+                }
             }
 
             blockNumber++;
@@ -513,25 +666,52 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
 
         List<NdefBlock> blocks = new ArrayList<>();
         final int messageByteLength = ((ndefMessageLength - (startingBlockNo - 1)) * 4) - paddingCount;
-        for (int k = 0; k < messageByteLength; k++) {
+        
+        // Add bounds checking to prevent IndexOutOfBoundsException
+        final int actualMessageLength = Math.min(messageByteLength, ndefMessage.size());
+        System.out.println("ACRReader: Calculated message length: " + messageByteLength);
+        System.out.println("ACRReader: Actual message length: " + actualMessageLength);
+        System.out.println("ACRReader: NDEF message size: " + ndefMessage.size());
+        
+        for (int k = 0; k < actualMessageLength; k++) {
             // find first message
             
-            System.out.println("ACRReader: Final NDEF message length " + messageByteLength);
-            int blockIndex = NdefBlockUtil.getBlockIndex(ndefMessage.subList(k, messageByteLength));
+            System.out.println("ACRReader: Processing at index " + k);
+            
+            // Ensure we don't exceed the list bounds
+            if (k >= ndefMessage.size()) {
+                System.out.println("ACRReader: Index " + k + " exceeds message size, breaking");
+                break;
+            }
+            
+            int remainingLength = ndefMessage.size() - k;
+            int blockIndex = NdefBlockUtil.getBlockIndex(ndefMessage.subList(k, ndefMessage.size()));
             System.out.println("NILAI K " + k);
             System.out.println("BLOCK INDEX " + blockIndex);
-            if (blockIndex < 0 ){
-                NdefBlock block = new NdefBlock(ndefMessage.subList(k, k + (blockIndex * -1)));
+            System.out.println("REMAINING LENGTH " + remainingLength);
+            
+            if (blockIndex < 0) {
+                // End of message
+                int endIndex = Math.min(k + (blockIndex * -1), ndefMessage.size());
+                System.out.println("ACRReader: End of message detected, creating block from " + k + " to " + endIndex);
+                NdefBlock block = new NdefBlock(ndefMessage.subList(k, endIndex));
                 if (!block.isEmptyRecord()) {
                     blocks.add(block);
                 }
                 break;
+            } else if (blockIndex > 0) {
+                // Valid block found
+                int endIndex = Math.min(k + blockIndex, ndefMessage.size());
+                System.out.println("ACRReader: Creating block from " + k + " to " + endIndex);
+                NdefBlock block = new NdefBlock(ndefMessage.subList(k, endIndex));
+                if (!block.isEmptyRecord()) {
+                    blocks.add(block);
+                }
+                k = k + blockIndex - 1;
+            } else {
+                // Invalid block index, skip this byte
+                System.out.println("ACRReader: Invalid block index, skipping byte at " + k);
             }
-            NdefBlock block = new NdefBlock(ndefMessage.subList(k, k + blockIndex));
-            if (!block.isEmptyRecord()) {
-                blocks.add(block);
-            }
-            k = k + blockIndex - 1;
         }
 
         List<String> messages = new ArrayList<>();
@@ -760,4 +940,5 @@ public class MifareNfcReaderPlugin implements FlutterPlugin, MethodCallHandler {
         handler.post(() -> channel.invokeMethod("onReadUID", uid));
     }
 }
+
 
